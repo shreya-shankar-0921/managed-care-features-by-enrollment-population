@@ -1,0 +1,244 @@
+---
+title: "Medicaid Managed Care: Trends and specialized Population Models (2016-2024)"
+author: "Shreya Shankar"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: hide
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 9, fig.height = 6)
+
+# Load required libraries
+library(tidyverse)
+library(plotly)
+library(stringr)
+library(DT)
+```
+
+
+# Executive Summary
+This report provides a longitudinal and cross-sectional analysis of state-level Medicaid managed care utilization from 2016 to 2024. Over the past decade, state Medicaid agencies have aggressively transitioned away from traditional fee-for-service models, utilizing managed care arrangements to stabilize budget predictability and coordinate care. However, the deployment of these models is not monolithic; it varies drastically based on the acuity and demographic profile of the covered populations. 
+
+Through automated data cleaning pipelines and interactive visualization, this analysis explores three core structural dynamics: the near-universal saturation of Comprehensive Managed Care Organizations (MCOs) for standard populations, the strategic tiering of high-acuity interventions (MLTSS and PACE), and the complex policy debate surrounding specialty service "carve-outs" for behavioral and dental health.
+
+--------------------------------------------------------------------------------
+
+# Data Pipeline and Pre-processing
+
+Public health administrative data often contains footnotes and non-standard characters embedded within numeric columns (e.g., "FC/AA26" or "--"). The pipeline below isolates the target variables, cleans the text artifacts using regular expressions, and structures the data for longitudinal and cross-sectional analysis.
+
+```{r data-clean, echo=FALSE}
+# Load the raw data
+df_raw <- read_csv("data/managed-care-features.csv", show_col_types = FALSE)
+
+# Clean column names
+names(df_raw) <- str_trim(names(df_raw))
+
+# Function to extract numeric values from messy strings
+clean_numeric <- function(x) {
+  x <- as.character(x)
+  # Replace common null indicators with "0"
+  x[is.na(x) | x == "--" | str_trim(x) == ""] <- "0"
+  # Extract the first sequence of digits
+  extracted <- str_extract(x, "\\d+")
+  return(as.numeric(ifelse(is.na(extracted), 0, extracted)))
+}
+
+# The core columns AND their "Voluntary" counterparts
+cols_to_clean <- c(
+  "Comprehensive MCO with or without MLTSS", "Comprehensive MCO with or without MLTSS 2",
+  "MLTSS", "MLTSS 2",
+  "BHO (PIHP and/or PAHP)", "BHO (PIHP and/or PAHP) 2",
+  "Dental", "Dental 2",
+  "PACE", "PACE 2"
+)
+
+# Apply cleaning pipeline and combine totals
+df_clean <- df_raw %>%
+  mutate(`Features` = str_trim(`Features`)) %>%
+  # 1. Clean the text out of all numeric columns
+  mutate(across(all_of(cols_to_clean), clean_numeric)) %>%
+  # 2. Combine Mandatory (Col 1) and Voluntary (Col 2) into the main column for accurate totals
+  mutate(
+    `Comprehensive MCO with or without MLTSS` = `Comprehensive MCO with or without MLTSS` + `Comprehensive MCO with or without MLTSS 2`,
+    MLTSS = MLTSS + `MLTSS 2`,
+    `BHO (PIHP and/or PAHP)` = `BHO (PIHP and/or PAHP)` + `BHO (PIHP and/or PAHP) 2`,
+    Dental = Dental + `Dental 2`,
+    PACE = PACE + `PACE 2`
+  ) %>%
+  filter(!is.na(Year)) %>%
+  mutate(Year = as.integer(Year))
+```
+
+--------------------------------------------------------------------------------
+
+
+
+# The Saturation of Comprehensive MCOs
+
+**Question**: How has the adoption of Comprehensive MCOs for primary eligibility groups evolved across states from 2016 to 2024?
+
+Comprehensive MCOs are the foundational vehicle for modern Medicaid service delivery, operating under capitated risk-based contracts. To understand baseline managed care penetration, we track the longitudinal adoption of this model for three primary eligibility categories: Low-income Adults, Non-Disabled Children, and Aged, Blind, or Disabled populations.
+
+```{r q1_mco_trends}
+# Standardize the Oxford comma issue before filtering
+mco_trend_data <- df_clean %>%
+  mutate(Features = str_replace(Features, "Aged, Blind, or Disabled", "Aged, Blind or Disabled"))
+
+target_pops <- c(
+  "Low-income Adults", 
+  "Aged, Blind or Disabled Children or Adults",
+  "Non-Disabled Children (excluding children in foster care or receiving adoption assistance)"
+)
+
+mco_trend_data <- mco_trend_data %>%
+  filter(Features %in% target_pops) %>%
+  mutate(Features = str_replace(Features, "\\(excluding children in foster care or receiving adoption assistance\\)", "(Non-Foster)"))
+
+p1 <- ggplot(mco_trend_data, aes(x = Year, y = `Comprehensive MCO with or without MLTSS`, color = Features, group = Features)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  scale_y_continuous(breaks = seq(30, 50, 2)) + 
+  theme_minimal() +
+  labs(
+    title = "State Adoption of Comprehensive MCOs (2016-2024)",
+    x = "Year",
+    y = "Number of States",
+    color = "" 
+  )
+
+# Convert to interactive widget and force legend to the bottom
+ggplotly(p1) %>% 
+  layout(
+    legend = list(
+      orientation = "h",   
+      xanchor = "center",  
+      x = 0.5,             
+      y = -0.3             
+    ),
+    margin = list(b = 100) 
+  )
+```
+
+>**Analysis**: The longitudinal data demonstrates a clear ceiling effect in managed care adoption. By 2016, Non-Disabled Children and Aged/Blind/Disabled populations were already heavily integrated into MCOs across the majority of states. The most notable trend is the steady, continuous growth in MCO adoption for Low-income Adults. This upward trajectory reflects the maturation of Affordable Care Act (ACA) Medicaid expansions; as states expanded coverage to this adult group, they systematically migrated these new enrollees into capitated MCO arrangements, ultimately reaching parity with the other populations by 2024 (nearly 50 states). MCOs are now the undisputed baseline mechanism for standard Medicaid delivery.
+
+
+--------------------------------------------------------------------------------
+
+
+# Tiering High-Acuity Interventions (MLTSS vs. PACE)
+
+**Question**: How do states deploy specialized, highly integrated care models for populations requiring intensive, long-term support?
+
+Standard MCOs are designed for acute and preventive care, which is often insufficient for populations with severe chronic conditions or complex daily living needs. To manage these groups, states utilize specialized risk-based models like MLTSS (Managed Long-Term Services and Supports) and PACE (Program of All-Inclusive Care for the Elderly). This cross-sectional view examines how states targeted these models in 2024.
+
+```{r q2_specialized}
+# 1. Standardize and dramatically shorten the population names
+specialized_data_2024 <- df_clean %>%
+  filter(Year == 2024) %>%
+  select(Features, MLTSS, PACE) %>%
+  mutate(
+    Features = case_when(
+      str_detect(Features, "Aged, Blind") ~ "Aged, Blind, Disabled",
+      str_detect(Features, "Full Dually") ~ "Full Dual Eligibles",
+      str_detect(Features, "Special Health") ~ "Special Needs Children",
+      str_detect(Features, "Non-Disabled") ~ "Non-Disabled Children",
+      str_detect(Features, "Foster Care") ~ "Foster Care/Adoption",
+      str_detect(Features, "waiver or other authority") ~ "Waiver Adults",
+      str_detect(Features, "American Indians") ~ "Native American / Alaskan Native",
+      str_detect(Features, "Exempt populations") ~ "Exempt Populations",
+      TRUE ~ Features
+    )
+  ) %>%
+  pivot_longer(cols = c(MLTSS, PACE), names_to = "Care_Model", values_to = "States_Count")
+
+# 2. Filter out groups that have ZERO states for both models to keep the axis clean
+active_groups <- specialized_data_2024 %>%
+  group_by(Features) %>%
+  summarize(Total = sum(States_Count)) %>%
+  filter(Total > 0) %>%
+  arrange(Total)
+
+# Filter data and lock in the sorting order
+specialized_data_2024 <- specialized_data_2024 %>%
+  filter(Features %in% active_groups$Features) %>%
+  mutate(Features = factor(Features, levels = active_groups$Features))
+
+# 3. Create the faceted chart WITHOUT free_y to bypass the Plotly bug
+p2 <- ggplot(specialized_data_2024, aes(x = States_Count, y = Features, fill = Care_Model)) +
+  geom_col() +
+  facet_wrap(~ Care_Model) + 
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    panel.spacing = unit(2, "lines"),
+    axis.text.y = element_text(size = 11)
+  ) +
+  labs(
+    title = "Deployment of Specialized Care Models (2024)",
+    x = "Number of States",
+    y = ""
+  ) +
+  scale_fill_manual(values = c("MLTSS" = "#2c3e50", "PACE" = "#e74c3c"))
+
+# Convert to widget and enforce a fixed left margin (l = 180) to anchor the text
+ggplotly(p2) %>%
+  layout(margin = list(l = 180))
+```
+
+
+>**Analysis**: The visualization reveals a distinct, tiered approach to high-acuity population health management. PACE is the most intensive and restrictive model in the Medicaid ecosystem; consequently, its deployment is strictly locked to just two highly specific groups: Full Dual Eligibles and the Aged, Blind, or Disabled. It is a highly targeted intervention. Conversely, MLTSS acts as a broader safety-net mechanism. While it heavily serves those same elderly and disabled demographics, states also leverage MLTSS for complex pediatric populations, such as Special Needs Children and youth in Foster Care. This indicates that while PACE is reserved for end-of-life or severe adult disability, MLTSS is the preferred vehicle for managing chronic, complex care across the broader life course.
+
+
+--------------------------------------------------------------------------------
+
+# The "Carve-Out" Strategy: Dental vs. Behavioral Health
+
+**Question**: For which populations do states most frequently carve out specialty services from the comprehensive medical benefit?
+
+A persistent health policy debate is whether to integrate specialty services into a single, comprehensive MCO contract or "carve them out" to specialized, standalone vendor networks. Analyzing carve-outs provides insight into how states handle services that require distinct provider networks or highly specialized clinical oversight.
+
+```{r q3_carveouts}
+carveout_data_2024 <- df_clean %>%
+  filter(Year == 2024) %>%
+  select(Features, `BHO (PIHP and/or PAHP)`, Dental) %>%
+  rename(`Behavioral Health` = `BHO (PIHP and/or PAHP)`) %>%
+  pivot_longer(cols = c(`Behavioral Health`, Dental), names_to = "Service_Type", values_to = "States_Count") %>%
+  filter(States_Count > 0) %>%
+  # Shorten labels for better readability
+  mutate(Features = str_trunc(Features, 40))
+
+p3 <- ggplot(carveout_data_2024, aes(x = States_Count, y = reorder(Features, States_Count), fill = Service_Type)) +
+  geom_col() +
+  facet_wrap(~ Service_Type) + # Creates side-by-side charts
+  theme_minimal() +
+  theme(
+    legend.position = "none", # Legend is redundant now
+    panel.spacing = unit(2, "lines") # Adds breathing room between the charts
+  ) +
+  labs(
+    title = "Which States 'Carve Out' Specialty Services? (2024)",
+    x = "Number of States",
+    y = ""
+  ) +
+  scale_fill_manual(values = c("Behavioral Health" = "#27ae60", "Dental" = "#8e44ad"))
+
+# Convert to interactive widget
+ggplotly(p3)
+```
+
+>**Analysis**: State strategies diverge sharply depending on the clinical domain. Dental care is heavily compartmentalized; the vast majority of states carve out dental benefits into separate Prepaid Ambulatory Health Plans (PAHPs), particularly for pediatric populations (Non-Disabled Children, Foster Care, Special Needs). This is largely driven by the historical separation of dental and medical provider networks in the U.S. healthcare system. Behavioral Health, however, tells a different story. The modern policy gold standard is physical and behavioral health integration, meaning Behavioral Health Organizations (BHOs) are less frequently carved out for standard populations. However, states *do* carve out behavioral health for high-acuity groups with severe mental illness or complex trauma histories—most notably the Aged, Blind, or Disabled and Foster Care youth. For these highly vulnerable groups, states often rely on specialized, standalone behavioral health networks rather than trusting a general medical MCO to manage their severe psychiatric needs.
+
+
+--------------------------------------------------------------------------------
+
+
+
+
+

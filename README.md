@@ -8,7 +8,7 @@ As state Medicaid agencies transition populations away from traditional fee-for-
 
 ### View the Live Interactive Report
 
-**[Insert Your GitHub Pages Link Here: e.g., https://username.github.io/repo-name/]**
+**[https://shreya-shankar-0921.github.io/managed-care-features-by-enrollment-population/]**
 
 ## Key Analytical Themes
 
